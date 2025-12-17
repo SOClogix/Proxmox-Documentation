@@ -148,7 +148,7 @@ https://www.proxmox.com/en/downloads/proxmox-virtual-environment/iso
 
 #### 3. Choose the target disk to install.
 
-<img src="../images/select-hard-disk.png" alt="PVE EULA" height="450" width="800">
+<img src="../images/select-hard-disk.png" alt="Select Disk" height="450" width="800">
 
     The installer creates a Volume Group (VG) called pve, and additional Logical Volumes (LVs) called root, data, and swap, if ext4 or xfs is used.
 
@@ -156,7 +156,7 @@ https://www.proxmox.com/en/downloads/proxmox-virtual-environment/iso
 
 #### 4. Advanced LVM Configuration Options.
 
-<img src="../images/advanced-lvm-configurtion-options.png" alt="PVE EULA" height="500" width="800">
+<img src="../images/advanced-lvm-configurtion-options.png" alt="LVM Options" height="500" width="800">
 
     hdsize
         Defines the total hard disk size to be used.  
@@ -250,7 +250,7 @@ https://www.proxmox.com/en/downloads/proxmox-virtual-environment/iso
 
 #### 5. Next, set the location, time zone, and keyboard layout. The installer autodetects most of these configurations.
 
-<img src="../images/select-location-and-time-zone.png" alt="PVE EULA" height="390" width="800">
+<img src="../images/select-location-and-time-zone.png" alt="Location and Time Zone" height="390" width="800">
 
 #### Recommendations
 - Ensure the Time Zone matches what is accurate for your organization, location, policy, etc.
@@ -260,7 +260,7 @@ https://www.proxmox.com/en/downloads/proxmox-virtual-environment/iso
 
 #### 6. Create an admin password and type in an email address for system administrator notifications.
 
-<img src="../images/choose-root-password.png" alt="PVE EULA" height="500" width="800">
+<img src="../images/choose-root-password.png" alt="Set Root Password and Admin Email Address" height="500" width="800">
 
 > This sets the password for the root user
 
@@ -284,7 +284,7 @@ https://www.proxmox.com/en/downloads/proxmox-virtual-environment/iso
 
 #### 7. The final step in installing Proxmox is setting up the network configuration. Select the management interface, a hostname for the server, an available IP address, the default gateway, and a DNS server. During the installation process, use either an IPv4 or IPv6 address. To use both, modify the configuration after installing.
 
-<img src="../images/proxmox-network-configuration.png" alt="PVE EULA" height="520" width="800">
+<img src="../images/proxmox-network-configuration.png" alt="PVE Network Configuration" height="520" width="800">
 
 ---
 
