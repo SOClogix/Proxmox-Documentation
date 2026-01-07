@@ -558,7 +558,9 @@ Successful completion results in:
 
 Verify identity resolution:
 
-`id username@ad-domain.com`
+```
+id username@ad-domain.com
+```
 > Make sure to replace with an existing user and domain name
 
 Successful output confirms proper UID and GID resolution from Active Directory.
@@ -566,6 +568,29 @@ Successful output confirms proper UID and GID resolution from Active Directory.
 If required, update PAM configuration:
 
 pam-auth-update
+
+---
+
+### Authentication
+
+Once the Proxmox host has been joined to Active Directory and SSSD (or an equivalent identity service) is configured, domain users can authenticate to the host over SSH using their domain identity.
+
+In most enterprise environments, the recommended format is to log in using the user’s UPN (User Principal Name), which typically looks like an email address:
+
+`ssh user@domain.com@<proxmox-hostname-or-ip>`
+
+Replace `user@domain.com` with the user’s actual domain account UPN (for example, `jdoe@corp.example.com`).
+
+> **Note:** When using UPN format, SSH interprets the first `@` as part of the username and the final `@` as the host delimiter.   
+> This is expected.  
+> Example: `ssh jdoe@corp.example.com@pve01.corp.example.com`
+
+If your environment uses the `DOMAIN\username` format instead of UPN, you may need to escape the backslash:
+
+`ssh DOMAIN\\username@<proxmox-hostname-or-ip>`
+
+This behavior varies depending on your AD/SSSD configuration and how user identities are mapped on the Linux host.
+
 
 ---
 
