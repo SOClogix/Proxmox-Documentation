@@ -169,6 +169,7 @@ apt upgrade -y
 apt autoremove -y
 proxmox-boot-tool kernel pin <YOUR_CURRENT_KERNEL_VERSION>
 ```
+> See below `Alternate script (no kernel pinning)` section for explanation of apt commands
 
 Example (do not copy this example version unless it matches your `uname -r` output):
 
@@ -221,6 +222,17 @@ apt update
 apt upgrade -y
 apt autoremove -y
 ```
+> **Update script command breakdown**
+>
+> - `apt-get autoclean` removes outdated package files from the local APT cache. This helps reclaim disk space by deleting package files that can no longer be downloaded (obsolete versions).
+>
+> - `apt update` refreshes the package index from configured repositories. This does not install updates, but ensures the system knows what versions are available.
+>
+> - `apt upgrade -y` installs available package updates without removing packages. The `-y` flag automatically answers “yes” to prompts, allowing the upgrade to run non-interactively.
+>
+> - `apt autoremove -y` removes packages that were automatically installed as dependencies but are no longer required. This helps keep the system clean and reduces disk usage over time.
+
+
 
 ---
 
@@ -742,18 +754,6 @@ Predefined roles include:
 - `PVEVMAdmin`: fully administer VMs
 - `PVEVMUser`: view, backup, configure CD-ROM, VM console, VM power management
 
-**Inheritance**
-
-As mentioned earlier, object paths form a file system like tree, and permissions can be inherited by objects down that tree (the propagate flag is set by default). Proxmox VE uses the following inheritance rules:
-
-- Permissions for individual users always replace group permissions.
-- Permissions for groups apply when the user is member of that group.
-- Permissions on deeper levels replace those inherited from an upper level.
-- `NoAccess` cancels all other roles on a given path.
-- Privilege separated tokens can never have permissions on any given path that their associated user does not have.
-
-> Inheritance is powerful but can lead to unintended access if permissions are granted too high in the tree. Prefer narrow paths and review the propagate flag carefully.
-
 ---
 
 #### 2. Assign permissions using objects and paths
@@ -767,15 +767,28 @@ Paths can also be templated. When an API call requires permissions on a template
 Some common examples:
 
 - `/`: The root level, granting access to all objects in the datacenter. Permissions here affect the entire cluster.
+- `/nodes`: Access to all Proxmox VE nodes in the cluster.
 - `/nodes/{node}`: Access to Proxmox VE server machines
-- `/vms`: Covers all VMs
-- `/vms/{vmid}`: Access to specific VMs
+- `/vms`: Access to all VMs
+- `/vms/{vmid}`: Access to a specific VM
 - `/storage/{storeid}`: Access to a specific storage
 - `/pool/{poolname}`: Access to resources contained in a specific pool
 - `/access/groups`: Group administration
 - `/access/realms/{realmid}`: Administrative access to realms
 
 > Best practice is to assign permissions at the lowest reasonable path to limit scope and reduce unintended inherited access.
+
+**Inheritance**
+
+Object paths form a file system like tree, and permissions can be inherited by objects down that tree (the propagate flag is set by default). Proxmox VE uses the following inheritance rules:
+
+- Permissions for individual users always replace group permissions.
+- Permissions for groups apply when the user is member of that group.
+- Permissions on deeper levels replace those inherited from an upper level.
+- `NoAccess` cancels all other roles on a given path.
+- Privilege separated tokens can never have permissions on any given path that their associated user does not have.
+
+> Inheritance is powerful but can lead to unintended access if permissions are granted too high in the tree. Prefer narrow paths and review the propagate flag carefully.
 
 ---
 
@@ -788,7 +801,8 @@ Both `PVEAdmin` and `Administrator` are high-privilege roles and should be reser
 
 Use cases for limited roles:
 
-- VM operators should typically use `PVEVMAdmin` or a custom role scoped to a pool or specific VM paths.
+- VM operators should typically use `PVEVMUser` scoped to the appropriate VM paths or pools. 
+- Reserve `PVEVMAdmin` for teams responsible for full VM lifecycle management, including hardware configuration changes.
 - Auditors and support teams should use `PVEAuditor` or a restricted read-only role.
 
 > Avoid granting cluster-wide `Administrator` or `PVEAdmin` access unless it is operationally required and documented.
@@ -991,7 +1005,7 @@ If AD is configured, avoid building parallel “local” RBAC models unless you 
 
 ### IV. Virtual Machine CPU and Memory Configuration Best Practices
 
-This section provides guidance for CPU and memory settings that apply to the majority of virtual machine workloads.
+This section provides guidance for CPU and memory settings that apply to the majority of virtual machine workloads. The goal is to balance performance, compatibility, and operational flexibility (especially live migration and cluster scalability) in enterprise environments.
 
 Topics include:
 
@@ -1001,6 +1015,458 @@ Topics include:
 - Memory allocation strategies, including ballooning considerations
 - Overcommit guidance and when to avoid aggressive memory overcommit
 - High-level discussion of hugepages and when they may be appropriate
+
+---
+
+#### 1. Recommended CPU types and when to avoid host passthrough
+
+For most enterprise workloads, use a **cluster-compatible CPU type** rather than `host` passthrough. This improves compatibility, reduces operational risk, and enables smooth live migration across nodes by ensuring a consistent, predictable CPU feature set across your cluster.
+
+**Recommended CPU model approach**
+
+- Prefer the **`x86-64-v2` / `x86-64-v2-AES` / `x86-64-v3` / `x86-64-v4`** family where supported
+- Use **`qemu64`** only for legacy compatibility requirements
+- Use **`kvm64`** only when required for older guest OSes or strict compatibility constraints
+- Avoid **`host`** unless you have a specific workload requirement and have validated migration constraints
+
+> Using a consistent CPU type across the cluster reduces migration failures and prevents subtle performance or feature mismatches across nodes.
+
+---
+
+**Understanding the `x86-64-v2` / `v3` / `v4` CPU model levels**
+
+The `x86-64-v*` models are standardized CPU feature baselines designed to provide a balance of performance and portability. Each version represents a newer baseline with more modern instruction set requirements.
+
+- **`x86-64-v2`**
+  - Broad compatibility across modern server hardware
+  - Adds commonly expected instruction sets beyond the original x86-64 baseline
+  - Suitable as a cluster-default when hardware generations vary
+
+- **`x86-64-v2-AES`**
+  - Same baseline as `x86-64-v2`, but explicitly ensures AES-NI support
+  - Useful for workloads where encryption performance matters (TLS-heavy services, VPNs, storage encryption)
+  - Recommended when you want a broadly compatible baseline but do not want to lose AES acceleration
+
+- **`x86-64-v3`**
+  - Requires additional modern instruction sets (notably AVX/AVX2 class capabilities)
+  - Can improve performance in compute-heavy workloads (compression, encryption, analytics, certain databases)
+  - Only use if all hosts in the cluster meet the feature requirements
+
+- **`x86-64-v4`**
+  - The most modern baseline (includes newer vector instruction capabilities such as AVX-512 class features on capable hardware)
+  - Can provide performance improvements for specialized workloads that benefit from these instructions
+  - Not recommended as a default unless your cluster hardware is highly consistent and known to support it
+
+> In general:  
+> - `x86-64-v2` is the safest broad enterprise default when hardware generations vary.  
+> - `x86-64-v2-AES` is a strong default when you want the broad compatibility of `v2` but also want to ensure AES-NI is consistently exposed for encryption-heavy workloads.  
+> - `x86-64-v3` is a good option for clusters with uniformly modern CPUs (and can improve performance for compute-heavy workloads).  
+> - `x86-64-v4` should be reserved for specialized workloads on very consistent, modern hardware, since it requires newer instruction sets that are not universally available.  
+
+
+---
+
+**Legacy compatibility models**
+
+- **`qemu64`**
+  - Very generic CPU model with high compatibility
+  - Often used when maximum portability is required across diverse hardware
+  - Can reduce performance by hiding modern CPU features
+
+- **`kvm64`**
+  - Similar intent to `qemu64`, but may expose slightly different virtualization features depending on environment
+  - May be required for older OSes or extremely compatibility-sensitive workloads
+  - Not recommended for modern clusters unless required
+
+> If you have old guests or mixed/unknown CPU hardware, `qemu64` is the most portable option, but it may sacrifice performance and modern CPU acceleration features.
+
+---
+
+**When to avoid or use `host` CPU type**
+
+Using the `host` CPU type in Proxmox VE gives your virtual machines (VMs) the best performance by exposing **all of the host’s CPU features (flags)** directly to the guest. This can improve performance for workloads that benefit from specific CPU accelerations (encryption, compression, SIMD/vector operations, databases, HPC workloads).
+
+However, `host` passthrough significantly limits operational flexibility:
+
+- Live migration may fail if the destination host does not support the exact same CPU flags
+- Hardware refreshes or mixed CPU generations can cause VM start failures on other nodes
+- Cluster upgrades become more complex because CPU feature sets must remain compatible
+
+> Use `host` only when you have a measured workload requirement, uniform CPU hardware across the cluster, and you have validated that your live migration and recovery workflows still function as expected.
+
+---
+
+**Modern vs legacy CPU examples (helpful when selecting a cluster CPU type)**
+
+The `x86-64-v2` and `x86-64-v2-AES` CPU profiles are designed as broadly compatible baselines and are often the safest default for enterprise clusters, especially when hardware generations vary. The newer `x86-64-v3` and `x86-64-v4` profiles provide additional modern instruction sets and can improve performance, but they work best only when cluster CPU hardware is consistently modern and uniform. If your environment includes older servers or mixed CPU generations, standardizing on `x86-64-v2` (or in extreme legacy cases `qemu64`) helps maintain compatibility and predictable migration behavior.
+
+
+**Examples of modern enterprise-class CPUs (typically safe for `x86-64-v2` and often `x86-64-v3`)**
+
+- **Intel Xeon Scalable (Skylake-SP and newer):** 2017+ (Bronze/Silver/Gold/Platinum)  
+- **Intel Xeon Scalable (Ice Lake / Sapphire Rapids):** 2021+ / 2023+ (strong candidates for `x86-64-v3` and in some cases `x86-64-v4`)  
+- **AMD EPYC (Naples / Rome / Milan / Genoa):** 2017+ (solid `v2`, commonly `v3` in homogeneous clusters)  
+- **AMD Threadripper / Threadripper Pro (enterprise workstation tiers):** 2017+ (commonly supports `v3`; treat as “server-like” only if deployed consistently across nodes)
+
+**What is typically safe for `x86-64-v4`?**
+
+`x86-64-v4` is the most demanding standardized CPU baseline and generally maps to **AVX-512 class** capabilities.  
+It is only a safe cluster default when **every node** supports the required instruction sets.
+
+- **Most commonly safe:** **Intel Xeon Scalable 3rd Gen (Ice Lake-SP) and newer:** 2021+  
+- **Strong candidates:** **Intel Xeon Scalable 4th Gen (Sapphire Rapids):** 2023+  
+- **Sometimes safe (validate per model):** **Intel Xeon Scalable 2nd Gen (Cascade Lake-SP):** 2019 (many SKUs support AVX-512, but cluster consistency and BIOS exposure still matter)
+
+`x86-64-v4` is **generally not recommended** for:
+
+- **AMD EPYC / AMD Threadripper / AMD-based clusters** (AVX-512 support differs and is not a consistent baseline)
+- **Mixed Intel + AMD clusters**
+- **Clusters with mixed CPU generations or stepping differences**
+
+> Treat `x86-64-v4` as a specialized baseline for clusters built on uniform Intel AVX-512 capable hardware. For most enterprise clusters, `x86-64-v2` / `x86-64-v2-AES` is the safest default, and `x86-64-v3` is a good choice when hardware is consistently modern.
+
+**Examples of legacy CPUs (often require conservative baselines)**
+
+- **AMD Opteron (many generations):** typically 2010–2016 era (often best suited for `kvm64` or `qemu64` depending on model and compatibility needs)  
+- **Intel Xeon 55xx / 56xx (Nehalem/Westmere):** 2009–2011 (legacy baseline; frequently requires older CPU models)  
+- **Intel Xeon E5 v1/v2 (Sandy Bridge / Ivy Bridge):** 2012–2013 (may still work with `x86-64-v2`, but cluster consistency must be validated)  
+- **Older mixed hardware clusters (pre-2014):** strongly consider `x86-64-v2` or `qemu64` for predictable migration behavior  
+
+As a general rule, **servers from ~2014 or earlier** should be treated as potentially legacy for migration planning, and **servers from 2017+** are typically modern enough for `x86-64-v2` and often `x86-64-v3` if the cluster is consistent.
+
+---
+
+#### 2. Live migration and CPU compatibility considerations
+
+Live migration requires CPU feature compatibility between the source and destination hosts. Even small differences between CPU generations can break migrations when using passthrough CPU types.
+
+Best practices:
+
+- Standardize CPU type at the cluster level
+- Avoid mixing CPU families or generations when possible
+- When mixing is unavoidable, choose the lowest common CPU model that supports required features
+- Validate migration behavior during cluster expansion or hardware refresh
+
+> CPU incompatibility is one of the most common root causes of migration failures in mixed-hardware clusters.
+>
+> In mixed-hardware environments or when upgrading to newer hardware, it may be necessary to temporarily adjust a VM’s CPU type away from `host` to a more compatible profile (such as `x86-64-v2-AES` or `x86-64-v3`) to enable a successful migration or restore. This change should be performed during a controlled maintenance window and validated to ensure the VM boots and operates correctly under the temporary CPU profile.
+
+---
+
+#### 3. When and why to enable NUMA
+
+NUMA (Non-Uniform Memory Access) awareness is relevant for larger VMs and systems with multiple CPU sockets.  
+Enabling NUMA helps the guest OS align CPU scheduling and memory locality, reducing cross-socket memory access penalties.
+
+General guidance:
+
+- For small to medium VMs (low vCPU count, moderate memory), NUMA usually provides little benefit
+- For large VMs (high vCPU count and large RAM allocations), NUMA can improve performance and reduce latency
+
+NUMA is most relevant when:
+
+- VMs use large memory allocations (tens of GB or more)
+- VMs have high core counts (typically 8+ vCPUs, more often 16+)
+- workloads are latency sensitive (databases, analytics, high-throughput services)
+
+> NUMA tuning is most effective when host hardware is properly aligned and the VM is sized to fit within a NUMA node. Poor NUMA alignment can reduce performance rather than improve it.
+
+Key Benefit:  
+- Avoids Remote Access: Ensures a VM's vCPUs primarily use memory directly attached to their physical CPU socket, avoiding slow access over the interconnect bus to memory on another socket. 
+
+---
+
+#### 4. Memory allocation strategies and ballooning considerations
+
+Memory allocation strategy is a key performance and stability decision.   
+The best approach depends on workload predictability and operational requirements.
+
+Recommended guidance:
+
+- Use fixed memory allocation for most production workloads that require predictable performance
+- Use ballooning cautiously and only when you have capacity planning and monitoring in place
+
+**Ballooning**
+
+Ballooning allows the hypervisor to reclaim unused memory from VMs under pressure and redistribute it to other VMs.
+
+Benefits:
+
+- Helps increase consolidation density
+- Provides flexibility when workloads are predictable and monitored
+
+Risks:
+
+- Guests may behave unpredictably under reclaimed memory
+- Can cause latency spikes, cache eviction, and degraded application performance
+- Some workloads perform poorly when memory availability fluctuates
+
+> Ballooning should not be treated as a substitute for proper capacity planning. If a VM is business-critical, allocate the memory it needs and avoid frequent reclamation events.
+
+---
+
+#### 5. Overcommit guidance and when to avoid aggressive overcommit
+
+Memory overcommit enables higher VM density, but it introduces operational risk. Overcommit should be deliberate and aligned with monitoring, workload predictability, and recovery expectations.
+
+General enterprise guidance:
+
+- Light overcommit can be acceptable if workloads are stable and predictable
+- Avoid aggressive overcommit unless you have strong monitoring and a clear failure handling strategy
+- Avoid overcommit for latency-sensitive workloads (databases, critical service tiers, real-time workloads)
+
+Signs you should reduce overcommit:
+
+- frequent swap activity on the host
+- recurring memory pressure events
+- ballooning reclamation in critical VMs
+- kernel OOM events or service instability
+- VM performance anomalies correlated with host memory pressure
+
+> Overcommit failures are not graceful. If the host runs out of reclaimable memory, the kernel may invoke the OOM killer and terminate processes, including Proxmox services or VM-related workloads.
+
+---
+
+#### 6. Hugepages (high-level guidance)
+
+Hugepages reduce memory management overhead by using larger page sizes (typically 2MB pages instead of 4KB pages). They can improve performance for workloads that:
+
+- allocate large contiguous memory regions
+- have high TLB pressure
+- are highly memory intensive
+
+Potential benefits:
+
+- lower CPU overhead for memory translation
+- improved performance for certain databases and high-throughput workloads
+- more predictable memory behavior in some cases
+
+Trade-offs:
+
+- memory becomes less flexible and harder to reclaim
+- hugepages must be planned and reserved
+- over-allocation can reduce available memory for other workloads
+
+> Hugepages should be treated as an advanced optimization. Only enable them when there is a measured performance need and when you understand the memory reservation and operational impacts.
+
+---
+
+**Why HugePages require planning and reservation**
+
+HugePages must be planned and reserved (usually at boot time) because they provide large, contiguous memory blocks for performance-critical workloads. By using larger page sizes (such as 2MB or 1GB), HugePages reduce CPU overhead by lowering Translation Lookaside Buffer (TLB) misses and improving virtual-to-physical address translation efficiency. They are commonly used by large databases, high-throughput networking stacks (such as DPDK), and other memory-intensive applications that benefit from predictable, low-latency memory behavior.
+
+Unlike normal memory pages, HugePages are not dynamically freed and refilled easily. HugePages are pinned (non-swappable) and must be reserved in advance so the kernel can allocate and track the required number of large pages. In many cases, adjusting HugePages allocations requires kernel parameter changes and may require a reboot to take effect reliably, especially when using 1GB pages or when memory fragmentation prevents allocation at runtime.
+
+**Why planning and reservation are necessary**
+
+- **Performance:** Reduces TLB misses by using larger pages (for example 2MB or 1GB), improving address translation speed and reducing CPU overhead in memory-intensive workloads.
+- **Contiguity:** Provides large, uninterrupted memory blocks, which can be important for Direct Memory Access (DMA), packet processing (DPDK), large caches, and database buffer pools.
+- **Non-swappable:** HugePages are pinned and cannot be swapped to disk, avoiding severe performance hits that occur when large memory regions are swapped under pressure.
+- **Kernel limits:** The kernel needs to know how many HugePages to reserve, and in many cases they cannot be added or removed easily after boot without rebooting due to fragmentation or allocation constraints.
+
+**How HugePages are typically configured**
+
+- **Calculate needs:** Determine how much memory the workload should consume as HugePages (for example, Oracle SGA size / HugePage size).
+- **Reserve hugepages using kernel parameters:** Configure the number of HugePages to allocate using parameters such as `vm.nr_hugepages` (2MB pages) and, when applicable, page size parameters such as `hugepagesz`.
+  - Example configuration location: `/etc/sysctl.conf` or `/etc/sysctl.d/99-hugepages.conf`
+- **Optional bootloader configuration:** For large page sizes (such as 1GB) or for deterministic reservation behavior, set HugePages via GRUB kernel command line parameters such as:
+  - `default_hugepagesz=1G hugepagesz=1G hugepages=4`
+- **Mount `hugetlbfs` (if required):** Some applications require access to HugePages through a mounted filesystem interface.
+- **Apply changes:** Use `sysctl -p` for sysctl-managed settings, or reboot the host for kernel command line reservations and to avoid allocation failures due to fragmentation.
+- **Disable Transparent HugePages (THP) if necessary:** Many database vendors recommend disabling THP (for example, `transparent_hugepage=never` in GRUB), because THP can introduce fragmentation and unpredictable latency spikes under memory pressure.
+
+**Key takeaway**
+
+HugePages must be planned based on peak workload requirements and reserved in advance. If insufficient HugePages are reserved, applications may fail to start, fail to allocate large contiguous buffers, or lose the performance benefits that HugePages are intended to provide.
+
+
+---
+
+**Host-level hugepages (Proxmox VE host configuration)**
+
+Hugepages must be made available at the host kernel level before VMs can reliably consume them. This is typically done by configuring kernel parameters via GRUB so the host reserves hugepage memory during boot.
+
+A common configuration is to enable 1GB hugepages for large VMs while leaving the default hugepage size at 2MB for general compatibility:
+
+Edit GRUB:
+
+```
+nano /etc/default/grub
+```
+> Don't forget to prepend `sudo` if using a non-root user.
+
+Example configuration:
+
+`GRUB_CMDLINE_LINUX_DEFAULT="quiet intel_iommu=on hugepagesz=1G default_hugepagesz=2M"`
+
+This example enables 1GB hugepages while keeping 2MB hugepages as the default size for compatibility, and it also enables Intel IOMMU support for passthrough and advanced device isolation use cases.
+
+- `intel_iommu=on` enables the Intel IOMMU (Input–Output Memory Management Unit). This is commonly required for PCI passthrough (`VFIO`), SR-IOV, and strong DMA isolation. If your environment does not use passthrough or SR-IOV, this option is not strictly required.
+- `hugepagesz=1G` enables 1GB hugepages on the host.
+- `default_hugepagesz=2M` ensures the system still uses 2MB hugepages as the default hugepage size when hugepages are requested without a specific size, preserving compatibility.
+
+> Proxmox VE typically defaults to `GRUB_CMDLINE_LINUX_DEFAULT="quiet"` to keep the kernel command line minimal. Additional parameters should be added only when required by your environment.
+
+
+Update GRUB and reboot:
+
+```
+update-grub
+```
+> Don't forget to prepend `sudo` if using a non-root user.  
+> If using a non-root user without `sudo` then you may get a response saying the command does not exist.
+```
+reboot now
+```
+
+Verify hugepage availability after reboot:
+
+```
+cat /proc/meminfo | grep -i Huge
+```
+
+> Hugepages are reserved at boot and are not swappable. The reserved memory becomes unavailable to normal host processes unless it is used by hugepage-backed workloads. Plan capacity carefully and avoid reserving excessive hugepages.
+
+---
+
+**VM-specific hugepages (per-VM configuration)**
+
+Hugepages are typically enabled on a per-VM basis so only selected workloads consume reserved hugepage-backed memory.
+
+To configure hugepages for a VM:
+
+1. Stop the VM (required for hugepage changes)
+
+2. Enable the 1GB hugepage CPU flag (required for 1GB hugepages)  
+
+In the Proxmox Web UI:
+- VM → Hardware → CPU → enable `+pdpe1gb`  
+> Make sure to toggle Advanced settings as enabled (check box).  
+> The `pdpe1gb` CPU flag enables the guest to use 1GB pages. Without it, 1GB hugepages will not be usable inside the guest.
+
+<img src="../images/enable_pdpe1gb_cpu_flag.png" alt="Enable pdpe1gb CPU flag." height="482" width="695">
+
+3. Add the `hugepages` setting to the VM configuration
+
+HugePages can be enabled per-VM by adding a `hugepages` setting to the VM configuration. This ensures the VM’s memory is backed by HugePages from the host’s reserved pool.
+
+This can be done by editing the VM configuration file or via the `qm set` command.
+
+**Option A: Configure via VM config file**
+
+VM configuration files are stored under:
+
+`/etc/pve/qemu-server/<vmid>.conf`
+
+Edit the VM config file:
+
+```
+nano /etc/pve/qemu-server/<vmid>.conf
+```
+> Make sure to set the correct `vmid` for the `.conf` file.
+
+Add one of the following examples:
+
+- **2MB HugePages**
+  - `hugepages: 2`
+- **1GB HugePages**
+  - `hugepages: 1`
+
+If you want to keep the HugePages reserved after shutdown (optional), add:
+
+- `keephugepages: 1`
+
+Example configuration (2MB HugePages with reservation kept after shutdown):
+
+- `hugepages: 2`
+- `keephugepages: 1`
+
+> When using `hugepages: 2`, Proxmox will attempt to allocate VM memory from 2MB hugepages.  
+> When using `hugepages: 1`, Proxmox will attempt to allocate VM memory from 1GB hugepages (requires host and guest support, including the `+pdpe1gb` CPU flag).  
+> `keephugepages: 1` prevents Proxmox from deleting reserved hugepages after VM shutdown, which can reduce allocation delays and lower the risk of allocation failure due to memory fragmentation.
+
+---
+
+**Option B: Configure via `qm set`**
+
+For **2MB HugePages**:
+
+```
+qm set <vmid> --hugepages 2
+```
+> Make sure to set the correct `vmid`  
+
+For **1GB HugePages**:
+
+```
+qm set <vmid> --hugepages 1024
+```
+```
+qm set <vmid> --hugepages any
+```
+> If the `--hugepages` is set to `any` then 1 GiB hugepages will be used if possible, otherwise the size will fall back to 2 MiB.
+
+If you want Proxmox to keep the HugePages reserved after shutdown (optional):
+
+```
+qm set <vmid> --keephugepages 1
+```
+
+Example (2MB HugePages with reservation kept after shutdown):
+
+```
+qm set <vmid> --hugepages 2 --keephugepages 1
+```
+
+> `--keephugepages 1` prevents Proxmox from deleting reserved hugepages after VM shutdown, which can reduce allocation delays and lower the risk of allocation failure due to memory fragmentation. This also reduces hugepage availability for other workloads while the VM is powered off, so capacity planning is required.
+
+---
+
+**Sizing considerations**
+
+- When using **1GB HugePages**, VM memory should be configured as a multiple of 1GB to avoid allocation waste or start failures.
+- If insufficient HugePages are available on the host, the VM may fail to start.
+- HugePages are reserved and non-swappable, so plan capacity carefully.
+
+> HugePages are not dynamically allocated under pressure. If the host does not have enough free HugePages available, the VM may fail to start or may block other HugePage-backed VMs from starting.
+
+
+4. Start the VM and validate performance and stability
+
+---
+
+**Key considerations**
+
+- **Performance:** Hugepages reduce CPU overhead for memory management and can improve performance for memory-intensive workloads such as databases, analytics platforms, and virtualization hosts running nested workloads.
+- **Memory reservation:** Hugepages are allocated at boot and are not swappable. They reduce available RAM for the host and other VMs, so the reservation must be sized carefully.
+- **VM start behavior:** If the host does not have enough available hugepages, the VM may fail to start. Hugepages should be treated as a reserved resource similar to pinned CPU or dedicated storage.
+- **Compatibility:** 1GB hugepages require modern CPU support and the `+pdpe1gb` flag enabled on the VM. Mixed-hardware clusters must be validated carefully.
+- **THP vs manual hugepages:** Manually configured hugepages are different from Transparent Hugepages (THP). THP can be disabled (`never`) on the host if it causes latency or fragmentation issues for specific workloads.
+
+---
+
+**Operational best practices**
+
+- Use hugepages only when there is a measured benefit for the workload
+- Prefer enabling hugepages for specific large VMs rather than broadly across the cluster
+- Avoid over-reserving hugepages, as unused reserved memory reduces operational flexibility
+- Validate VM start and failover behavior when hugepages are used
+- Document hugepage allocations as part of capacity planning and maintenance procedures
+
+---
+
+#### Recommended baseline (enterprise default)
+
+For most enterprise Proxmox clusters:
+
+- Use a consistent cluster-compatible CPU model across nodes
+- Avoid `host` passthrough unless required
+- Enable NUMA only for large VMs where it provides measurable benefit
+- Use fixed memory allocation for critical workloads
+- Use ballooning selectively and only with monitoring
+- Avoid aggressive memory overcommit in production
+- Consider hugepages only for specific workloads with demonstrated benefit
+
 
 ---
 
@@ -1804,4 +2270,6 @@ This guide is intended to provide clear, practical defaults that work well for m
 [haveged](https://linux.die.net/man/8/haveged)  
 [PVE Post Install Script](https://community-scripts.github.io/ProxmoxVE/scripts?id=post-pve-install&category=Proxmox+%26+Virtualization)  
 [PVE Processor Microcode](https://community-scripts.github.io/ProxmoxVE/scripts?id=microcode&category=Proxmox+%26+Virtualization)
-[User Management](https://pve.proxmox.com/wiki/User_Management#pveum_permission_management)
+[User Management](https://pve.proxmox.com/wiki/User_Management#pveum_permission_management)  
+[PVE Admin Guide - User Management](https://pve.proxmox.com/pve-docs/pve-admin-guide.html#user_mgmt)  
+[PVE Admin Guide](https://pve.proxmox.com/pve-docs/pve-admin-guide.html)
