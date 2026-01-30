@@ -118,7 +118,7 @@ journalctl -k | grep -E "microcode" | head -n 1
 
 ---
 
-## III. Virtual Machine CPU and Memory Configuration
+### III. Virtual Machine CPU and Memory Configuration
 
 This section outlines **optional, environment-dependent considerations** for configuring virtual machine CPU and memory settings in Proxmox VE. The guidance provided here is not intended to define defaults or broadly applicable best practices. Instead, it highlights configuration choices that may be beneficial for certain workloads, performance profiles, or operational models.
 
@@ -368,7 +368,7 @@ For most enterprise Proxmox clusters:
 
 ---
 
-## IV. Network Interface Optional Practices
+### IV. Network Interface Optional Practices
 
 This section outlines **optional, situational network-related adjustments** that may be useful in certain Proxmox VE environments. The practices described here are not default configurations and are not expected to be applicable to most deployments. They are primarily intended for troubleshooting, performance tuning, or mitigating specific, observed network issues.
 
@@ -806,7 +806,7 @@ cat /etc/udev/rules.d/60-net-txqueue.rules
 
 ---
 
-## V. Storage and Disk Configuration Optional Practices
+### V. Storage and Disk Configuration Optional Practices
 
 This section outlines **optional, environment-dependent storage and disk configuration considerations** for Proxmox VE. The items covered here are not intended to represent default configurations or universally applicable best practices. Instead, they highlight storage-related options and tuning decisions that may be beneficial in specific workloads, performance-sensitive environments, or non-standard storage architectures.
 

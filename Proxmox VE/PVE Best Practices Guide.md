@@ -4,8 +4,6 @@
 
 This guide documents SOClogix-recommended best practices for operating Proxmox VE in production environments. It focuses on practical security hygiene, stable performance defaults, and common operational decisions. This is not a CIS benchmark or compliance audit and does not attempt to enumerate every possible hardening control. Instead, it provides opinionated guidance for the configurations and decisions most commonly encountered in real-world deployments.
 
-Deviations from these recommendations are permitted when justified by workload requirements or architectural constraints, but such deviations should be intentional and documented.
-
 #### Out of Scope
 
 This guide does not cover the following topics:
@@ -17,10 +15,10 @@ This guide does not cover the following topics:
 - Application-level performance tuning
 
 #### Keep in Mind
-- The sections of this guide are not necessarily done in order of "do this first" to "do this last".
-- Review each section and determine which items you will implement first.
+- The sections of this guide have been structured in a way that should facilitate a typical workflow but they are not necessarily done in order of "do this first" to "do this last".
+  > Review each section and determine which items you will implement and in what order.  
 - Do not implement an action just because it is listed in this guide.  
-First, ensure it meets organization needs, policy requirements, etc.
+  > First, ensure it meets organizational needs, policy requirements, etc.  
 
 ---
 
@@ -33,6 +31,7 @@ Before making any major changes, be sure to at least do the following:
 - Take a backup of any config file before you edit it
 - Apply changes on one node first if this is a cluster
 - Reboot only when you have a maintenance window
+  > Only important if the node is already running VMs or containers in production
 - After any sysctl change, verify it actually loaded
 
 Here is a nice quick “checkpoint” command list that you can use to capture a few important configuration settings.
@@ -43,7 +42,7 @@ cp -a /etc/sysctl.d /etc/sysctl.d.bak.$(date +%F)
 cp -a /etc/apt/apt.conf.d /etc/apt/apt.conf.d.bak.$(date +%F)
 cp -a /etc/logrotate.conf /etc/logrotate.conf.bak.$(date +%F)
 
-# See current sysctl overrides
+# Snapshot the current sysctl overrides
 sysctl --system | tail -n 50 >> "current_sysctl_overrides_backup-$(date +%F_%H%M%S).txt"
 ```
 Individual code-blocks for copying:
@@ -59,7 +58,7 @@ cp -a /etc/logrotate.conf /etc/logrotate.conf.bak.$(date +%F)
 ```
 sysctl --system | tail -n 50 >> "current_sysctl_overrides_backup-$(date +%F_%H%M%S).txt"
 ```
-> Exclude `>> current_sysctl_overrides_backup.txt` if you just want to see the output of current sysctl overrides.
+> Exclude `>> "current_sysctl_overrides_backup-$(date +%F_%H%M%S).txt"` if you just want to see the output of current sysctl overrides.
 
 If you want to setup a script to run the commands to run, then copy the above code-block with all of the commands and paste them into a new script which can be created, made executable, and ran via the following commands:  
 Open / Create Script using nano:
@@ -80,6 +79,11 @@ Run Script:
 ```
 ./checkpoint_snapshot.sh
 ```
+**OR:**  
+Run Script without needing to make it executable:
+```
+bash checkpoint_snapshot.sh
+```
 > Make sure to change the filepath for `current_sysctl_overrides_backup.txt` if you want it to be written to a specific directory other than the current working directory.
 
 #### 2. PVE Post Install Helper Script
@@ -92,7 +96,7 @@ This helper script provides a guided, interactive way to complete common post-in
 >
 > **Trade-off**
 >
-> This script modifies system configuration and may change repository behavior. Enabling the test repository is not recommended for production environments. System updates and reboots should be planned carefully to avoid impacting running workloads.
+> This script modifies system configuration and may change repository behavior. Enabling the test repository is not recommended for production environments. System updates and reboots should be planned carefully to avoid impacting running workloads. While typically safe for most production environments, the non-subscription repository is not recommendd for production.
 
 Execute within the Proxmox shell.
 
@@ -114,6 +118,7 @@ To run the script, use the following command **only** in the Proxmox VE Shell:
 ```
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/post-pve-install.sh)"
 ```
+> For nodes in a cluster, run on each node.
 
 **Source:**  
 [PVE Post Install Script](https://community-scripts.github.io/ProxmoxVE/scripts?id=post-pve-install&category=Proxmox+%26+Virtualization)  
@@ -213,7 +218,7 @@ If you have out-of-band management (such as iDRAC, iLO, or similar remote consol
 
 ##### Alternate script (no kernel pinning)
 
-If you have iDRAC or another remote console solution that provides full out-of-band access, you can use this simplified version:
+If you have iDRAC or an alternative that provides remote access, then you can safely omit the kernel pinning like below:  
 
 ```
 #! /bin/bash
@@ -241,15 +246,10 @@ apt autoremove -y
 This section covers baseline security hygiene that should be implemented on all Proxmox VE hosts unless there is a documented exception.
 
 Topics include:
-- SSH hardening, including disabling password authentication and requiring public key authentication
-- Restricting or disabling direct root login over SSH
-- Creating a local, non-root administrative user for console and emergency access
-- Using sudo for privilege escalation and retaining root for break-glass scenarios only
-- Limiting management access to trusted networks
-- Avoiding exposure of the Proxmox Web UI to untrusted or public networks
-- Maintaining system updates and defining a reboot strategy for kernel updates
-- Ensuring time synchronization and basic logging practices
-- Installing and maintaining CPU microcode updates using the Proxmox VE Processor Microcode Helper Script to address hardware-level security vulnerabilities and stability issues
+- Setting up a non-root user and restricting root for break-glass scenarios
+- Enforcing least privilege with sudo
+- SSH Access Control Hardening 
+- Automating Security Updates
 
 #### 1. Setup non-root Linux user
 > You can reasonably skip this section if you followed `Section 2: Join the Proxmox Host to the Active Directory Domain` of the PVE AD Authentication Guide as you will be able to logon using your AD account: `user@domain.com`
@@ -544,13 +544,13 @@ Reload SSH to apply changes without dropping active sessions:
 
 ---
 
-#### Generate a private/public key pair
+##### Generate a private/public key pair
 
 For enterprise environments, key-based authentication should be mandatory for administrative access.
 
 > We recommend using Bitvise SSH Client’s **Client Key Manager** for key generation and management.
 >
-> Standardize on the `Ed25519` algorithm unless your organization requires otherwise.
+> Standardize on the `Ed25519` algorithm unless your organization or environment requires otherwise.
 >
 > Use a passphrase for private keys to reduce risk if a key file is exposed.
 
@@ -564,7 +564,7 @@ ssh-keygen -t ed25519 -a 64 -C "adminuser"
 
 ---
 
-#### Export an OpenSSH-format public key
+##### Export an OpenSSH-format public key
 
 If you are using Bitvise, you can export the public key in OpenSSH format using the Client Key Manager.
 
@@ -579,7 +579,7 @@ cat ~/.ssh/id_ed25519.pub
 
 ---
 
-#### Add the public key to the administrative user
+##### Add the public key to the administrative user
 
 Place the public key into the target user’s authorized keys file (Make sure to replace `adminuser` with your username):
 
@@ -607,7 +607,7 @@ chown -R adminuser:adminuser /home/adminuser/.ssh
 
 ---
 
-#### Verify key-based login
+##### Verify key-based login
 
 From your workstation:
 
@@ -617,6 +617,106 @@ ssh adminuser@<proxmox-hostname-or-ip>
 > Or use your chosen SSH tool such as PuTTY, Bitvise, mRemoteNG, etc.  
 
 Once verified, ensure that password authentication remains disabled (`PasswordAuthentication no`) and that only authorized users can access SSH.
+
+---
+
+#### 4. Implement Un-Attended Security Updates
+Configure automatic, unattended security updates.  
+Why are these essential:  
+- Reduced Attack Window: Vulnerabilities are patched as soon as updates are released
+- Consistency: All servers receive updates on the same schedule
+- Reduced Human Error: No chance of forgetting to apply critical patches
+- Time Savings: System administrators can focus on more important tasks
+- Compliance: Many security standards require timely patching
+
+> Make sure to prepend `sudo` to the commands if using a non-root user
+
+##### Check if `unattended-upgrades` is installed/enabled
+```
+dpkg-reconfigure unattended-upgrades
+```
+
+##### Install unattended-upgrades and apt-listchanges
+```
+apt update
+```
+```
+apt install unattended-upgrades apt-listchanges
+```
+
+##### Enable Automatic Updates
+```
+dpkg-reconfigure --priority=low unattended-upgrades
+```
+> Select `yes` when prompted to enable automatic updates.  
+> This command creates a file at `/etc/apt/apt.conf.d/20auto-upgrades` with the following content:  
+`APT::Periodic::Update-Package-Lists "1";`  
+`APT::Periodic::Unattended-Upgrade "1";`
+
+##### Verify Installation
+```
+systemctl status unattended-upgrades
+```
+```
+apt-cache policy unattended-upgrades
+```
+
+##### Configure the Settings
+The main configuration file for unattended-upgrades is located at `/etc/apt/apt.conf.d/50unattended-upgrades`.  
+
+```
+nano /etc/apt/apt.conf.d/50unattended-upgrades
+```
+> The `Unattended-Upgrade::Allowed-Origins` section defines which repositories are allowed for automatic updates.  
+###### Ensure the security origin is uncommented:
+```
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename},label=Debian-Security";
+    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+};
+```
+> The following can be commented out: `"origin=Debian,codename=${distro_codename},label=Debian";`  
+> See the below resource for assistance preventing certain packages from being automatically updated if necessary:  
+[Package Blacklist Configuration](https://oneuptime.com/blog/post/2026-01-07-ubuntu-automatic-security-updates/view#:~:text=Package%20Blacklist%20Configuration)  
+
+###### Configure whether to automatically remove packages that are no longer needed.
+```
+// Remove unused dependencies after upgrade (similar to apt autoremove)
+// Set to true to keep your system clean
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+```
+> In the `/etc/apt/apt.conf.d/50unattended-upgrades` file: find, uncomment, and set to true the above.  
+
+###### Edit `20auto-upgrades`. 
+This file controls the frequency of the updates.
+```
+nano /etc/apt/apt.conf.d/20auto-upgrades
+```
+Adjust according to your organizational policy and/or risk model
+```
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "7";
+```
+> The above would update the APT packages every day and run the automatic security updates every 7 days.  
+> This leaves more critical scenarios involving immediate security updates requiring manual triggering.  
+
+##### Verify & Test
+Check status: 
+```
+systemctl status apt-daily.timer
+```
+and:
+```
+systemctl status apt-daily-upgrade.timer
+```
+Dry run: 
+```
+unattended-upgrades --dry-run --debug
+```  
+Check logs: 
+```
+cat /var/log/unattended-upgrades/unattended-upgrades.log  
+```
 
 ---
 
@@ -666,25 +766,76 @@ Predefined roles include:
 
 ---
 
-#### 2. Assign permissions using objects and paths
+#### 2. Understanding using objects and paths for access control
 
 **Objects and Paths**
 
-Access permissions are assigned to objects, such as virtual machines, storages, or resource pools. Proxmox uses file system-like paths to address these objects. These paths form a natural tree, and permissions at higher levels (shorter paths) can optionally be propagated down within this hierarchy.
+Permissions are assigned to objects, such as virtual machines, storages, or resource pools. Proxmox uses file system-like paths to address these objects. These paths form a natural tree, and permissions at higher levels (shorter paths) can optionally be propagated down within this hierarchy.
 
 Paths can also be templated. When an API call requires permissions on a templated path, the path may contain references to parameters of the API call. These references are specified in curly braces. Some parameters are implicitly taken from the API call’s URI. For instance, the permission path `/nodes/{node}` when calling `/nodes/mynode/status` requires permissions on `/nodes/mynode`, while the path `{path}` in a PUT request to `/access/acl` refers to the method’s path parameter.
 
 Some common examples:
 
-- `/`: The root level, granting access to all objects in the datacenter. Permissions here affect the entire cluster.
-- `/nodes`: Access to all Proxmox VE nodes in the cluster.
-- `/nodes/{node}`: Access to Proxmox VE server machines
-- `/vms`: Access to all VMs
-- `/vms/{vmid}`: Access to a specific VM
-- `/storage/{storeid}`: Access to a specific storage
-- `/pool/{poolname}`: Access to resources contained in a specific pool
-- `/access/groups`: Group administration
-- `/access/realms/{realmid}`: Administrative access to realms
+- `/`:  
+  The **datacenter root** object. This is the highest-level scope in Proxmox VE.  
+  Permissions granted here **cascade to all objects** in the cluster (nodes, VMs, storage, pools, etc.).  
+  Typically used for global administrator roles (e.g., full cluster admins).  
+  *Think of this as “everything in Proxmox.”*
+
+- `/nodes`:  
+  The collection of **all Proxmox VE nodes** (hosts) in the cluster.  
+  Permissions here allow visibility or control across **all nodes**, but not necessarily their child objects unless inherited.  
+  Useful for roles that manage hosts but not virtual machines or containers.
+
+- `/nodes/{node}`:  
+  A **specific Proxmox VE host** (physical or virtual server).  
+  Permissions apply to host-level operations such as:
+  - Node configuration
+  - Networking
+  - Storage availability on that node
+  - VM/container runtime actions on that node  
+  Does *not* automatically grant access to VMs unless permissions propagate.
+
+- `/vms`:  
+  A **logical grouping of all virtual machines and containers** across the cluster.  
+  Permissions here apply to **every VM/LXC**, regardless of which node they run on.  
+  Commonly used for VM operators or automation accounts.
+
+- `/vms/{vmid}`:  
+  A **single virtual machine or container**, identified by its VMID.  
+  Permissions here are **finely scoped** and affect only that workload:
+  - Start/stop
+  - Console access
+  - Snapshot/backup
+  - Configuration changes  
+  Ideal for tenant or per-VM access control.
+
+- `/storage/{storeid}`:  
+  A **specific storage definition** (e.g., local, NFS, Ceph, ZFS).  
+  Permissions control:
+  - Who can allocate disks
+  - Who can browse or delete stored content
+  - Backup and ISO access  
+  Storage availability may still vary per node.
+
+- `/pool/{poolname}`:  
+  A **resource pool** that groups VMs, containers, and storage.  
+  Permissions here grant access to *everything inside the pool* without exposing other cluster resources.  
+  Commonly used for multi-tenant setups or team-based isolation.
+
+- `/access/groups`:  
+  **User group management** scope.  
+  Permissions here allow creation, modification, and deletion of groups, and assignment of users to groups.  
+  Does not grant access to compute resources by itself.
+
+- `/access/realms/{realmid}`:  
+  A **specific authentication realm** (e.g., PAM, LDAP, AD, OpenID).  
+  Permissions allow administrative control over:
+  - Realm configuration
+  - Sync behavior
+  - Realm-specific users  
+  Used for identity and authentication management, not workload control.
+
 
 > Best practice is to assign permissions at the lowest reasonable path to limit scope and reduce unintended inherited access.
 
@@ -835,7 +986,8 @@ Even in AD environments, maintain a minimal, documented break-glass access path:
 
 Proxmox permissions should be assigned to **groups**, not individual users. Group-based RBAC supports least privilege, simplifies onboarding/offboarding, and ensures consistent access control across clusters.
 
-> Assigning permissions to individual users makes access control harder to audit, increases the chance of privilege drift, and complicates operational handoffs.
+> Assigning permissions to individual users makes access control harder to audit, increases the chance of privilege drift, and complicates operational handoffs.  
+> Additionally, users can be assigned to more than one group.
 
 **A. Non-AD environments (local Proxmox users and groups)**  
 > Skip to `B. AD environments (recommended for enterprise)` below if using an AD integrated environment.
@@ -1158,57 +1310,102 @@ These practices apply to almost all Proxmox VE host deployments.
 - Ensuring consistent MTU configuration across hosts, switches, and connected networks
 - Verifying correct link speed and duplex negotiation
 
+---
+
 #### 1. Use Linux bridges for VM networking
 
-Use native Linux bridges (`vmbrX`) for VM connectivity.  
-Avoid custom or non-standard networking approaches unless required by design.  
-Align with Proxmox-supported and well-documented networking models.
+**Best Practice:**
+- Use native Proxmox Linux bridges (`vmbrX`) for VM and container networking.
+- Prefer standard bridge configurations over custom or experimental networking.
+- Keep bridge designs simple and consistent across nodes to support migration and clustering.
 
-**Why:**  
-Predictable behavior, broad support, and simpler troubleshooting.
+**Why:**
+- Linux bridges (`vmbrX`) act as virtual network switches, connecting VM and container interfaces to the physical network in a predictable and well-understood way.
+- They allow multiple virtual workloads to share a single physical NIC while maintaining proper network isolation and performance.
+- Bridge-based networking enables VLAN awareness, making network segmentation simple and scalable without complex host reconfiguration.
+- Using bridges provides flexibility to attach, move, or modify VM network interfaces without host or guest downtime.
+- This abstraction aligns the Proxmox host and its guests to a consistent networking model, simplifying configuration, migrations, and long-term operations.
 
 ---
 
 #### 2. Avoid overloading the management interface
 
-Separate management traffic from heavy VM traffic when possible.  
-Use dedicated interfaces or VLANs for:
-- Proxmox management
-- Cluster communication
-- Storage traffic (Ceph, NFS, iSCSI)
+**Best Practice:**
+- Separate Proxmox management traffic from high-volume or latency-sensitive VM traffic whenever possible.
+- Use dedicated physical interfaces or VLANs for:
+  - Proxmox management and Web UI access
+  - Cluster communication (corosync)
+  - Storage traffic (Ceph, NFS, iSCSI)
 
-**Why:**  
-Prevents management instability during traffic spikes.
+**Why:**
+- Management and cluster services depend on low latency and reliable connectivity to function correctly.
+- Traffic congestion on shared interfaces can impact node visibility, cluster quorum, and administrative access.
+- Isolating management and infrastructure traffic improves stability, predictability, and fault isolation during traffic spikes or network issues.
+
+**Management Separation:**
+- **Proxmox management and Web UI access:**  
+  Ensures administrative access remains available during VM or storage traffic spikes and simplifies troubleshooting during incidents.
+- **Cluster communication (corosync):**  
+  Corosync is highly latency-sensitive; isolating it reduces the risk of false node failures, quorum loss, or unintended fencing.
+- **Storage traffic (Ceph, NFS, iSCSI):**  
+  Storage traffic is bandwidth-intensive and bursty; separating it prevents I/O workloads from impacting management and cluster stability.
+
+**Single-NIC and VLAN-Only Deployments (Clarification):**
+- In smaller environments or lab setups, a single physical NIC with VLAN separation is acceptable.
+- VLANs still provide logical traffic isolation and are often sufficient when bandwidth is not saturated.
+- Monitor latency and packet loss closely, especially for corosync traffic, and scale to additional interfaces as load increases.
+
+**Ceph and Corosync Considerations:**
+- Corosync requires consistently low latency and minimal packet loss; even brief congestion can impact cluster health.
+- Ceph and other storage backends generate sustained, high-bandwidth traffic that can overwhelm shared interfaces.
+- Separating or prioritizing these traffic types improves cluster stability, reduces false failure detection, and aligns with Proxmox, Ceph, and corosync operational guidance.
 
 ---
 
 #### 3. Keep NIC drivers and firmware up to date
 
-Use vendor-supported NIC firmware and drivers.  
-Coordinate updates with Proxmox VE and kernel release cycles.
+**Best Practice:**
+- Rely on **in-kernel NIC drivers** provided by Proxmox VE and Debian.
+- Keep drivers current by applying **Proxmox kernel updates**; Linux auto-detects NICs and loads the appropriate drivers at boot.
+- Avoid vendor-supplied out-of-tree drivers unless required for hardware support or specific fixes.
 
-**Why:**  
-Addresses stability issues, performance defects, and known vulnerabilities.
+**Firmware Guidance:**
+- Install distribution-provided firmware packages where applicable.
+- Update NIC firmware **only when vendor advisories, stability issues, performance defects, or security fixes justify it**.
+- Perform firmware updates during planned maintenance windows and validate after kernel upgrades.
+
+**Why:**
+- Improves stability and performance while minimizing driver incompatibilities.
+- Addresses known defects and vulnerabilities without undermining Proxmox kernel support.
 
 ---
 
 #### 4. Use consistent MTU settings across network paths
 
-Ensure MTU values are consistent end-to-end (host, switch, storage, VM).  
-Avoid partial or inconsistent jumbo frame configurations.
+**Best Practice:**
+- Ensure MTU values are consistent end-to-end across all network components, including hosts, switches, storage backends, and virtual machines.
+- Apply jumbo frames only when the entire network path explicitly supports them.
+- Avoid partial or mixed MTU configurations within the same traffic domain.
 
-**Why:**  
-MTU mismatches cause packet loss and difficult-to-diagnose performance issues.
+**Why:**
+- MTU mismatches can lead to packet fragmentation or silent drops, resulting in degraded performance and intermittent connectivity issues.
+- Inconsistent MTU settings are difficult to troubleshoot and can disproportionately impact storage and cluster traffic.
+- Consistent MTU configuration ensures predictable network behavior and reliable performance.
 
 ---
 
 #### 5. Validate link speed and duplex
 
-Ensure interfaces negotiate expected link speed and duplex settings.  
-Investigate auto-negotiation issues rather than forcing static values.
+**Best Practice:**
+- Verify that network interfaces negotiate the expected link speed and duplex settings.
+- Prefer auto-negotiation and investigate negotiation failures rather than forcing static configurations.
+- Validate link characteristics after hardware changes, firmware updates, or cabling modifications.
 
-**Why:**  
-Silent mis-negotiation can severely degrade throughput and increase latency.
+**Why:**
+- Incorrect speed or duplex negotiation can silently reduce throughput, increase latency, and introduce packet errors.
+- Auto-negotiation ensures both ends of the link agree on optimal settings and reduces the risk of mismatched configurations.
+- Regular validation helps detect physical or configuration issues before they impact workload performance.
+
 
 ---
 
@@ -1224,60 +1421,93 @@ These practices apply to most virtual machine workloads regardless of performanc
 
 ---
 
-#### 6. Use VirtIO network interfaces for most workloads
+#### 1. Prefer VirtIO network interfaces for virtual machines
 
-Default to VirtIO network adapters for Linux and modern Windows guests.  
-Install and maintain VirtIO drivers for Windows VMs.
+**Best Practice:**
+- Use VirtIO network adapters for Linux and modern Windows virtual machines.
+- Install and maintain VirtIO drivers for Windows guests before switching adapters.
+- If VirtIO drivers cannot be installed or are unsupported, use the E1000 interface as a compatibility fallback.
 
-**Why:**  
-Provides the best balance of performance, stability, and long-term support.
+**Why:**
+- VirtIO provides paravirtualized networking with lower overhead and significantly better performance than emulated adapters.
+- It is the preferred and most actively maintained network model for KVM-based virtualization.
+- Proper VirtIO driver support ensures stable, predictable networking and long-term compatibility, while E1000 remains a reliable fallback for legacy systems.
 
----
+**Migration Note (E1000 → VirtIO):**
+- Existing VMs using E1000 can be migrated to VirtIO by installing VirtIO drivers inside the guest OS first, then switching the network adapter type.
+- This approach avoids network loss and allows a controlled transition to higher-performance networking.
+- Migration should be tested during maintenance windows, especially for production workloads.
 
-#### 7. Assign appropriate vNIC count and bandwidth
-
-Avoid assigning unnecessary multiple network interfaces.  
-Prefer VLAN segmentation or traffic shaping over additional vNICs where possible.
-
-**Why:**  
-Reduces guest complexity and improves operational predictability.
-
----
-
-#### 8. Avoid unnecessary promiscuous mode
-
-Enable promiscuous mode only for workloads that explicitly require it.  
-Document exceptions when enabled.
-
-**Why:**  
-Reduces attack surface and unintended traffic exposure.
+**Windows Compatibility Considerations:**
+- Modern Windows versions (Windows 10/11, Windows Server 2012 R2 and newer) fully support VirtIO networking when drivers are installed.
+- Legacy systems such as **Windows Server 2008 R2** may have limited or unreliable VirtIO support depending on driver availability and patch level.
+- For unsupported or highly constrained legacy Windows systems, the **E1000 interface is an acceptable and supported fallback** to ensure stable connectivity.
 
 ---
 
-#### 9. Use stable MAC addressing
+#### 2. Assign appropriate vNIC count and bandwidth
 
-Allow Proxmox VE to manage MAC addresses or document static assignments.  
-Avoid frequent or unnecessary MAC address changes.
+**Best Practice:**
+- Assign virtual NICs intentionally based on workload requirements rather than by default.
+- Use VLAN segmentation, traffic shaping, or QoS where logical separation is sufficient.
+- Apply bandwidth limits only when workload characteristics are understood and require control.
 
-**Why:**  
-Prevents DHCP, firewall, and monitoring disruptions.
+**Why:**
+- Unplanned vNIC growth increases configuration complexity and operational overhead.
+- Intentional network design improves consistency across hosts and simplifies migration and troubleshooting.
+- Clear bandwidth expectations help avoid noisy-neighbor effects without over-engineering guest networking.
 
 ---
 
-#### 10. Validate live migration with network dependencies
+#### 3. Avoid unnecessary promiscuous mode
 
-Test live migration for VMs with network-specific requirements.  
-Ensure bridge and VLAN consistency across all cluster nodes.
+**Best Practice:**
+- Enable promiscuous mode only for workloads that explicitly require it (e.g., firewalls, IDS/IPS, packet capture).
+- Document and periodically review any exceptions.
 
-**Why:**  
-Network mismatches are a common cause of live migration failures.
+**Why:**
+- Promiscuous mode exposes traffic beyond what a workload normally requires.
+- Limiting its use reduces attack surface and prevents unintended traffic visibility.
+- Clear documentation improves auditability and long-term maintainability.
+
+---
+
+#### 4. Use stable MAC addressing
+
+**Best Practice:**
+- Allow Proxmox VE to automatically assign and manage MAC addresses.
+- If static MAC addresses are required, document and standardize their use.
+- Avoid changing MAC addresses unless operationally necessary.
+
+**Why:**
+- MAC address changes can disrupt DHCP leases, firewall rules, and monitoring systems.
+- Stable addressing ensures consistent network identity and reduces avoidable outages.
+- Predictable MAC management simplifies troubleshooting and automation.
+
+**ESXi Migration Considerations:**
+- When migrating virtual machines from VMware ESXi, preserve existing MAC addresses where possible.
+- Retaining MAC addresses allows DHCP reservations, MAC-based static IPs, and firewall rules to continue functioning without reconfiguration.
+- Document preserved MAC addresses during migration to maintain consistency and avoid address conflicts.
+
+---
+
+#### 5. Validate live migration with network dependencies
+
+**Best Practice:**
+- Test live migration for virtual machines with network-specific requirements.
+- Ensure bridges, VLAN IDs, MTU settings, and firewall rules are consistent across all cluster nodes.
+- Validate migration behavior after network or cluster configuration changes.
+
+**Why:**
+- Live migration depends on identical network availability on source and target nodes.
+- Inconsistent network configuration is a common cause of migration failure or post-migration connectivity loss.
+- Regular validation reduces risk during maintenance and cluster operations.
 
 ---
 
 ### What Is Intentionally Not Included
 
 The following items are **not** baseline best practices and are covered in the Optional Practices section:
-
 - TCP BBR and TCP Fast Open
 - NIC queue length tuning
 - Network-related sysctl performance tuning
@@ -1499,4 +1729,8 @@ This guide is intended to provide clear, practical defaults that work well for m
 [PVE Post Install Script](https://community-scripts.github.io/ProxmoxVE/scripts?id=post-pve-install&category=Proxmox+%26+Virtualization)  
 [User Management](https://pve.proxmox.com/wiki/User_Management#pveum_permission_management)  
 [PVE Admin Guide - User Management](https://pve.proxmox.com/pve-docs/pve-admin-guide.html#user_mgmt)  
-[PVE Admin Guide](https://pve.proxmox.com/pve-docs/pve-admin-guide.html)
+[PVE Admin Guide](https://pve.proxmox.com/pve-docs/pve-admin-guide.html)  
+[How to Set Up Automatic Security Updates on Ubuntu](https://oneuptime.com/blog/post/2026-01-07-ubuntu-automatic-security-updates/view)  
+[Debian - Periodic Updates](https://wiki.debian.org/PeriodicUpdates)  
+[Unattended upgrades - Github Repo](https://github.com/mvo5/unattended-upgrades)  
+[Configuring Unattended Upgrades on Debian - 0xBEN](https://benheater.com/configuring-unattended-upgrades-on-debian/)  
